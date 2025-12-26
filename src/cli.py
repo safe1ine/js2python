@@ -65,11 +65,14 @@ def convert_command(args: argparse.Namespace) -> int:
         sys.stderr.write(f"ERROR: Failed to read {input_path}: {exc}\n")
         return 1
 
+    source_type = "module" if getattr(args, "module", False) else "script"
+
     frontend_result = run_frontend(
         source,
         source_name=str(input_path),
         tolerant=not args.strict,
         analyze=True,
+        source_type=source_type,
     )
 
     if frontend_result.parse.ast is None:
@@ -130,6 +133,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--strict",
         action="store_true",
         help="Treat warnings as errors and disable tolerant parsing.",
+    )
+    convert_parser.add_argument(
+        "--module",
+        action="store_true",
+        help="Parse the input as an ES module (enables import/export syntax).",
     )
     convert_parser.set_defaults(func=convert_command)
 

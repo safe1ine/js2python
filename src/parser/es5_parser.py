@@ -1,10 +1,10 @@
 """
-ES5 JavaScript parsing utilities built on top of the Python `esprima` port.
+JavaScript parsing utilities built on top of the Python `esprima` port.
 
-The module exposes a `parse_es5` function that returns the JSON-compatible AST
-along with metadata describing the parse run. Consumers can decide whether to
-allow tolerant parsing by toggling the `tolerant` flag, which lets esprima
-collect recoverable errors instead of raising immediately.
+The module exposes `parse_js`, which returns the JSON-compatible AST along with
+metadata describing the parse run. Consumers can decide whether to allow
+recoverable parsing via the `tolerant` flag, and choose between script / module
+source types to unlock ES6+ syntax such as import/export.
 """
 
 from __future__ import annotations
@@ -51,19 +51,21 @@ def _hash_source(source: str) -> str:
     return hashlib.sha256(source.encode("utf-8")).hexdigest()
 
 
-def parse_es5(
+def parse_js(
     source: str,
     *,
     source_name: str = "<input>",
     tolerant: bool = True,
+    source_type: str = "script",
 ) -> ParseResult:
     """
-    Parse ES5 JavaScript source text into an esprima AST.
+    Parse JavaScript source text into an esprima AST.
 
     Args:
-        source: Raw JavaScript source code assumed to be ES5 compliant.
+        source: Raw JavaScript source code.
         source_name: Optional label used for diagnostics (defaults to `<input>`).
         tolerant: When True, esprima performs error recovery instead of raising.
+        source_type: `"script"` or `"module"`; modules enable ES6 import/export.
 
     Returns:
         ParseResult containing the AST, any recoverable errors, and metadata.
@@ -71,14 +73,10 @@ def parse_es5(
     Raises:
         esprima.Error: If parsing fails and `tolerant` is False.
     """
+    options = dict(loc=True, range=True, comment=True, tolerant=tolerant)
+    parser = esprima.parseModule if source_type == "module" else esprima.parseScript
     try:
-        ast = esprima.parseScript(
-            source,
-            loc=True,
-            range=True,
-            comment=True,
-            tolerant=tolerant,
-        )
+        ast = parser(source, **options)
     except esprima.Error:
         # Re-raise when caller opted into strict error handling.
         if not tolerant:
@@ -116,4 +114,16 @@ def parse_es5(
     )
 
 
-__all__ = ["ParseResult", "ParseError", "parse_es5"]
+def parse_es5(
+    source: str,
+    *,
+    source_name: str = "<input>",
+    tolerant: bool = True,
+) -> ParseResult:
+    """
+    Backwards compatible wrapper for legacy callers expecting ES5-only parsing.
+    """
+    return parse_js(source, source_name=source_name, tolerant=tolerant, source_type="script")
+
+
+__all__ = ["ParseResult", "ParseError", "parse_js", "parse_es5"]

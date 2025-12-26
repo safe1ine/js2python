@@ -1,11 +1,9 @@
 """
-Scope analysis for ES5 JavaScript ASTs.
+Scope analysis for JavaScript ASTs (ES5/ES6).
 
 The analyzer walks an esprima-compatible AST, builds a tree of lexical scopes,
-and records bindings introduced by `var`, `function`, and function parameters.
-It flags potentially problematic constructs (`with`, `eval`) that complicate
-static translation. The resulting scope metadata enables subsequent phases to
-reason about identifier resolution during JS → Python conversion.
+and记录`var`、`let`、`const`、函数、类以及 import 等绑定。它同时跟踪可能影响
+静态转换的特性（如 `with`、`eval`、解构），为后续翻译阶段提供基础信息。
 """
 
 from __future__ import annotations
@@ -18,14 +16,20 @@ from typing import Any, Dict, Iterable, List, Optional
 class ScopeType(str, Enum):
     GLOBAL = "global"
     FUNCTION = "function"
+    BLOCK = "block"
+    CLASS = "class"
     CATCH = "catch"
 
 
 class BindingKind(str, Enum):
     VAR = "var"
+    LET = "let"
+    CONST = "const"
     FUNCTION = "function"
+    CLASS = "class"
     PARAMETER = "parameter"
     CATCH_PARAMETER = "catch_parameter"
+    IMPORT = "import"
 
 
 @dataclass(frozen=True)
@@ -126,6 +130,67 @@ class _BindingAnalyzer:
             AnalysisIssue(code=code, message=message, loc=self._source_position(node))
         )
 
+    def _record_binding(
+        self, scope: Scope, name: str, kind: BindingKind, node: Dict[str, Any]
+    ) -> None:
+        if not name:
+            return
+        binding = Binding(
+            name=name,
+            kind=kind,
+            loc=self._source_position(node),
+            node=node,
+        )
+        scope.add_binding(binding)
+
+    def _resolve_var_scope(self, scope: Scope) -> Scope:
+        current = scope
+        while current.scope_type not in {ScopeType.GLOBAL, ScopeType.FUNCTION}:
+            if current.parent is None:
+                break
+            current = current.parent
+        return current
+
+    def _extract_pattern_identifiers(
+        self, pattern: Dict[str, Any], scope: Scope
+    ) -> List[Dict[str, Any]]:
+        identifiers: List[Dict[str, Any]] = []
+        pattern_type = pattern.get("type")
+        if pattern_type == "Identifier":
+            identifiers.append(pattern)
+        elif pattern_type == "AssignmentPattern":
+            left = pattern.get("left")
+            if isinstance(left, dict):
+                identifiers.extend(self._extract_pattern_identifiers(left, scope))
+            else:
+                self._add_issue(
+                    code="UNSUPPORTED_PATTERN",
+                    message="Assignment pattern not supported for this identifier.",
+                    node=pattern,
+                )
+        elif pattern_type == "ObjectPattern":
+            for prop in pattern.get("properties", []):
+                target = prop.get("value") or prop.get("argument")
+                if isinstance(target, dict):
+                    identifiers.extend(self._extract_pattern_identifiers(target, scope))
+        elif pattern_type == "ArrayPattern":
+            for element in pattern.get("elements", []):
+                if element is None:
+                    continue
+                if isinstance(element, dict):
+                    identifiers.extend(self._extract_pattern_identifiers(element, scope))
+        elif pattern_type == "RestElement":
+            argument = pattern.get("argument")
+            if isinstance(argument, dict):
+                identifiers.extend(self._extract_pattern_identifiers(argument, scope))
+        else:
+            self._add_issue(
+                code="UNSUPPORTED_PATTERN",
+                message=f"Pattern type '{pattern_type}' is not supported.",
+                node=pattern,
+            )
+        return identifiers
+
     def _visit(self, node: Any, scope: Scope) -> None:
         if node is None:
             return
@@ -154,36 +219,47 @@ class _BindingAnalyzer:
         self._visit(node.get("body", []), scope)
 
     def _visit_BlockStatement(self, node: Dict[str, Any], scope: Scope) -> None:
-        self._visit(node.get("body", []), scope)
+        if scope.scope_type == ScopeType.FUNCTION and scope.node.get("body") is node:
+            self._visit(node.get("body", []), scope)
+            return
+        block_scope = self._new_scope(ScopeType.BLOCK, node, scope)
+        self._visit(node.get("body", []), block_scope)
 
     def _visit_VariableDeclaration(self, node: Dict[str, Any], scope: Scope) -> None:
+        kind = node.get("kind", "var")
         for declarator in node.get("declarations", []):
-            self._visit_VariableDeclarator(declarator, scope)
+            self._visit_VariableDeclarator(declarator, scope, kind)
 
-    def _visit_VariableDeclarator(self, node: Dict[str, Any], scope: Scope) -> None:
+    def _visit_VariableDeclarator(
+        self, node: Dict[str, Any], scope: Scope, declaration_kind: str
+    ) -> None:
         identifier = node.get("id")
-        if isinstance(identifier, dict) and identifier.get("type") == "Identifier":
-            binding = Binding(
-                name=identifier.get("name"),
-                kind=BindingKind.VAR,
-                loc=self._source_position(identifier),
-                node=identifier,
+        target_scope = scope
+        binding_kind = BindingKind.VAR
+        if declaration_kind == "var":
+            target_scope = self._resolve_var_scope(scope)
+            binding_kind = BindingKind.VAR
+        elif declaration_kind == "let":
+            binding_kind = BindingKind.LET
+        elif declaration_kind == "const":
+            binding_kind = BindingKind.CONST
+        else:
+            self._add_issue(
+                code="UNSUPPORTED_DECLARATION_KIND",
+                message=f"Variable declaration kind '{declaration_kind}' is not supported.",
+                node=node,
             )
-            scope.add_binding(binding)
+
+        if isinstance(identifier, dict):
+            for simple in self._extract_pattern_identifiers(identifier, scope):
+                self._record_binding(target_scope, simple.get("name"), binding_kind, simple)
         # Visit initializer to catch nested functions etc.
         self._visit(node.get("init"), scope)
 
     def _visit_FunctionDeclaration(self, node: Dict[str, Any], scope: Scope) -> None:
         identifier = node.get("id")
         if isinstance(identifier, dict) and identifier.get("type") == "Identifier":
-            scope.add_binding(
-                Binding(
-                    name=identifier.get("name"),
-                    kind=BindingKind.FUNCTION,
-                    loc=self._source_position(identifier),
-                    node=identifier,
-                )
-            )
+            self._record_binding(scope, identifier.get("name"), BindingKind.FUNCTION, identifier)
         function_scope = self._new_scope(ScopeType.FUNCTION, node, scope)
         for param in node.get("params", []):
             self._register_parameter(param, function_scope)
@@ -194,17 +270,45 @@ class _BindingAnalyzer:
         identifier = node.get("id")
         if isinstance(identifier, dict) and identifier.get("type") == "Identifier":
             # Named function expressions bind the name within the inner scope.
-            function_scope.add_binding(
-                Binding(
-                    name=identifier.get("name"),
-                    kind=BindingKind.FUNCTION,
-                    loc=self._source_position(identifier),
-                    node=identifier,
-                )
-            )
+            self._record_binding(function_scope, identifier.get("name"), BindingKind.FUNCTION, identifier)
         for param in node.get("params", []):
             self._register_parameter(param, function_scope)
         self._visit(node.get("body"), function_scope)
+
+    def _visit_ArrowFunctionExpression(self, node: Dict[str, Any], scope: Scope) -> None:
+        function_scope = self._new_scope(ScopeType.FUNCTION, node, scope)
+        for param in node.get("params", []):
+            self._register_parameter(param, function_scope)
+        body = node.get("body")
+        if isinstance(body, dict) and body.get("type") == "BlockStatement":
+            self._visit(body, function_scope)
+        else:
+            self._visit(body, function_scope)
+
+    def _visit_ClassDeclaration(self, node: Dict[str, Any], scope: Scope) -> None:
+        identifier = node.get("id")
+        if isinstance(identifier, dict) and identifier.get("type") == "Identifier":
+            target_scope = scope if scope.scope_type != ScopeType.BLOCK else scope
+            self._record_binding(target_scope, identifier.get("name"), BindingKind.CLASS, identifier)
+        self._visit_ClassBase(node, scope)
+
+    def _visit_ClassExpression(self, node: Dict[str, Any], scope: Scope) -> None:
+        self._visit_ClassBase(node, scope)
+
+    def _visit_ClassBase(self, node: Dict[str, Any], scope: Scope) -> None:
+        identifier = node.get("id")
+        class_scope = self._new_scope(ScopeType.CLASS, node, scope)
+        if isinstance(identifier, dict) and identifier.get("type") == "Identifier":
+            # Class expressions may have inner binding visible inside class body.
+            self._record_binding(class_scope, identifier.get("name"), BindingKind.CLASS, identifier)
+        self._visit(node.get("superClass"), scope)
+        body = node.get("body", {})
+        for element in body.get("body", []):
+            self._visit(element, class_scope)
+
+    def _visit_MethodDefinition(self, node: Dict[str, Any], scope: Scope) -> None:
+        value = node.get("value")
+        self._visit(value, scope)
 
     def _visit_ReturnStatement(self, node: Dict[str, Any], scope: Scope) -> None:
         self._visit(node.get("argument"), scope)
@@ -258,21 +362,64 @@ class _BindingAnalyzer:
         self._visit(node.get("body"), scope)
 
     def _register_parameter(self, node: Dict[str, Any], scope: Scope) -> None:
-        if isinstance(node, dict) and node.get("type") == "Identifier":
-            scope.add_binding(
-                Binding(
-                    name=node.get("name"),
-                    kind=BindingKind.PARAMETER,
-                    loc=self._source_position(node),
-                    node=node,
-                )
-            )
+        if not isinstance(node, dict):
+            return
+        if node.get("type") == "Identifier":
+            self._record_binding(scope, node.get("name"), BindingKind.PARAMETER, node)
+            return
+        if node.get("type") == "RestElement":
+            argument = node.get("argument")
+            if isinstance(argument, dict):
+                self._register_parameter(argument, scope)
+            return
+        if node.get("type") == "AssignmentPattern":
+            self._register_parameter(node.get("left"), scope)
+            return
+        identifiers = self._extract_pattern_identifiers(node, scope)
+        if identifiers:
+            for identifier in identifiers:
+                self._record_binding(scope, identifier.get("name"), BindingKind.PARAMETER, identifier)
         else:
             self._add_issue(
                 code="UNSUPPORTED_PARAM_PATTERN",
-                message="Only simple identifier parameters are supported in ES5 mode.",
-                node=node if isinstance(node, dict) else scope.node,
+                message="Complex parameter pattern not supported.",
+                node=node,
             )
+
+    def _visit_ForInStatement(self, node: Dict[str, Any], scope: Scope) -> None:
+        self._visit(node.get("left"), scope)
+        self._visit(node.get("right"), scope)
+        self._visit(node.get("body"), scope)
+
+    def _visit_ForOfStatement(self, node: Dict[str, Any], scope: Scope) -> None:
+        self._visit(node.get("left"), scope)
+        self._visit(node.get("right"), scope)
+        self._visit(node.get("body"), scope)
+
+    def _visit_TemplateLiteral(self, node: Dict[str, Any], scope: Scope) -> None:
+        self._visit(node.get("expressions", []), scope)
+
+    def _visit_ImportDeclaration(self, node: Dict[str, Any], scope: Scope) -> None:
+        for specifier in node.get("specifiers", []):
+            local = specifier.get("local")
+            if isinstance(local, dict) and local.get("type") == "Identifier":
+                self._record_binding(scope, local.get("name"), BindingKind.IMPORT, local)
+        self._visit(node.get("source"), scope)
+
+    def _visit_ExportNamedDeclaration(self, node: Dict[str, Any], scope: Scope) -> None:
+        declaration = node.get("declaration")
+        if declaration:
+            self._visit(declaration, scope)
+        for specifier in node.get("specifiers", []):
+            exported = specifier.get("exported")
+            if isinstance(exported, dict):
+                self._visit(exported, scope)
+
+    def _visit_ExportDefaultDeclaration(self, node: Dict[str, Any], scope: Scope) -> None:
+        self._visit(node.get("declaration"), scope)
+
+    def _visit_ExportAllDeclaration(self, node: Dict[str, Any], scope: Scope) -> None:
+        self._visit(node.get("source"), scope)
 
 
 def analyze_bindings(ast: Dict[str, Any], *, source_name: str = "<input>") -> AnalysisResult:

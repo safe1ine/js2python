@@ -5,10 +5,12 @@ from frontend import run_frontend
 from transformer import transform_program
 
 
-def _load_ast(relative_path: str):
+def _load_ast(relative_path: str, *, source_type: str = "script"):
     source_path = Path(relative_path)
     source = source_path.read_text(encoding="utf-8")
-    frontend_result = run_frontend(source, source_name=str(source_path), analyze=True)
+    frontend_result = run_frontend(
+        source, source_name=str(source_path), analyze=True, source_type=source_type
+    )
     assert frontend_result.parse.ast is not None
     return frontend_result.parse.ast
 
@@ -123,3 +125,44 @@ def test_transformer_handles_object_and_array_literals():
     array_value = dict_value.values[2]
     assert isinstance(array_value, ast.List)
     assert result.diagnostics, "Expected diagnostics for sparse array handling"
+
+
+def test_transformer_handles_arrow_function_declarations():
+    program = _load_ast("tests/cases/arrow_function.js")
+    result = transform_program(program, source_name="arrow_function.js")
+    module = result.module
+
+    functions = [stmt for stmt in module.body if isinstance(stmt, ast.FunctionDef)]
+    names = {fn.name for fn in functions}
+    assert {"double", "sum"} <= names
+
+    sum_fn = next(fn for fn in functions if fn.name == "sum")
+    assert [arg.arg for arg in sum_fn.args.args] == ["a", "b"]
+    assert len(sum_fn.args.defaults) == 1
+
+
+def test_transformer_handles_class_declaration():
+    program = _load_ast("tests/cases/class_declaration.js")
+    result = transform_program(program, source_name="class_declaration.js")
+    module = result.module
+
+    class_def = next(stmt for stmt in module.body if isinstance(stmt, ast.ClassDef))
+    assert class_def.name == "Person"
+    method_names = {stmt.name for stmt in class_def.body if isinstance(stmt, ast.FunctionDef)}
+    assert "__init__" in method_names
+    greet_fn = next(stmt for stmt in class_def.body if isinstance(stmt, ast.FunctionDef) and stmt.name == "greet")
+    return_stmt = next(stmt for stmt in greet_fn.body if isinstance(stmt, ast.Return))
+    assert isinstance(return_stmt.value, ast.JoinedStr)
+
+
+def test_transformer_handles_module_imports_and_exports():
+    program = _load_ast("tests/cases/module_import.js", source_type="module")
+    result = transform_program(program, source_name="module_import.js")
+    module = result.module
+
+    import_statements = [stmt for stmt in module.body if isinstance(stmt, (ast.Import, ast.ImportFrom))]
+    assert any(isinstance(stmt, ast.ImportFrom) for stmt in import_statements)
+    assert any(isinstance(stmt, ast.Import) for stmt in import_statements)
+
+    functions = [stmt for stmt in module.body if isinstance(stmt, ast.FunctionDef)]
+    assert any(fn.name == "load" for fn in functions)

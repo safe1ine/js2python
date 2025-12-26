@@ -39,3 +39,21 @@ def test_cli_strict_mode(tmp_path):
     )
     assert result.returncode == 0, result.stderr
     assert output_path.exists()
+
+
+def test_cli_module_mode(tmp_path):
+    output_path = tmp_path / "module_out.py"
+    result = _run_cli(
+        [
+            "convert",
+            "tests/cases/module_import.js",
+            "--module",
+            "--out",
+            str(output_path),
+        ],
+        cwd=Path("."),
+    )
+    assert result.returncode == 0, result.stderr
+    content = output_path.read_text(encoding="utf-8")
+    assert "from path import join" in content
+    assert "import fs" in content

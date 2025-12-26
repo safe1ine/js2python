@@ -1,5 +1,5 @@
-"""Interfaces for parsing ES5 JavaScript source code."""
+"""Interfaces for parsing JavaScript source code."""
 
-from .es5_parser import ParseError, ParseResult, parse_es5
+from .es5_parser import ParseError, ParseResult, parse_es5, parse_js
 
-__all__ = ["ParseError", "ParseResult", "parse_es5"]
+__all__ = ["ParseError", "ParseResult", "parse_es5", "parse_js"]

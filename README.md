@@ -1,11 +1,11 @@
 # js2python
 
-一个命令行工具，用于将单个 ES5 JavaScript 源文件转换成可运行的 Python 模块，力求保留原始语义并方便后续人工调整。
+一个命令行工具，用于将单个 ES5/ES6 JavaScript 源文件转换成可运行的 Python 模块，力求保留原始语义并方便后续人工调整。
 
 ## 愿景与范围
-- 提供轻量 CLI，输入一个 ES5 `.js` 文件，输出一个同等行为的 Python 文件。
-- 聚焦 ES5 语法：函数、对象、数组、原型、闭包、`require`/`module.exports` 等核心特性。
-- 不处理 TypeScript、ES6+ 新增语法、Promise/async；超出范围的语法将提示用户。
+- 提供轻量 CLI，输入一个 ES5/ES6 `.js` 或 `.mjs` 文件，输出一个同等行为的 Python 文件。
+- 已覆盖 ES6 语法核心子集：`let`/`const`、箭头函数、类声明、模板字符串、模块 import/export 等；持续扩展其它语法。
+- 不处理 TypeScript、Promise/async、装饰器等高级特性；超出范围的语法将提示用户。
 
 ## 领域挑战
 - 运行时行为差异：`this` 绑定、原型链、动态属性需要细致映射。
@@ -21,18 +21,18 @@
 - 默认输出路径与输入同目录、同名（扩展名改为 `.py`）。可通过 `--out` 指定。
 
 ### 关键选项
-- `--runtime {auto,include,skip}`：控制是否在文件末尾追加兼容运行时片段。
-- `--strict`：将所有警告提升为错误，适用于 CI。
-- `--report <path>`：输出 JSON 格式的转换诊断信息。
-- `--debug-ast`：导出 JS AST 与 Python AST 供调试。
+- `--out <file>`：指定 Python 输出路径，默认与输入同名。
+- `--module`：按 ES Module 解析输入，支持 `import`/`export` 语法。
+- `--runtime {include,skip}`：控制是否在文件末尾追加兼容运行时片段（当前仍为占位，可用于后续集成）。
+- `--strict`：将所有警告提升为错误，并关闭容错解析，适用于 CI。
 
 ### 使用示例
 ```bash
 # 基础转换，输出到同级目录
 js2python convert legacy/widget.js
 
-# 指定输出路径并生成诊断报告
-js2python convert legacy/data.js --out build/data.py --report reports/data.json
+# 转换 ES Module，并输出到指定路径
+js2python convert modern/module.js --module --out build/module.py
 ```
 
 ## 架构概览
@@ -105,13 +105,13 @@ js2python/
 ```
 
 ## 实现思路与当前进展
-- **解析层**：使用 Python 版 `esprima`，`parse_es5` 提供可容错的 AST 结果，同时算出源码哈希方便缓存；诊断通过 `ParseError` 结构统一返回。
-- **语义分析**：`analyze_bindings` 遍历 AST 构建全局/函数/捕获块作用域，记录 `var`、函数、参数绑定并捕捉 `eval`、`with` 等风险语法，产出 `AnalysisResult` 提供给下游。
-- **前端总线**：`run_frontend` 将解析与作用域分析串成一体，按需落盘缓存并聚合诊断，供转换器与报告直接消费。
-- **转换层**：`Transformer` 基于递归访问实现 ES5→Python AST 映射，覆盖函数、控制流（if/for/while/do-while/switch）、异常处理、对象/数组字面量、逻辑与赋值表达式等；对降级（如 do-while、稀疏数组）通过 `diagnostics` 发出提醒。
+- **解析层**：使用 Python 版 `esprima`，`parse_js` 支持 script/module 双模式与容错解析，统一返回 AST、源码哈希及解析诊断。
+- **语义分析**：`analyze_bindings` 遍历 AST 构建全局/函数/块/类作用域，记录 `var`/`let`/`const`、函数/类/导入绑定并捕捉 `eval`、`with`、复杂解构等风险，生成 `AnalysisResult`。
+- **前端总线**：`run_frontend` 将解析与作用域分析串联，支撑缓存落盘与诊断汇总，方便后续阶段直接消费。
+- **转换层**：`Transformer` 现支持 ES5/ES6 核心结构——箭头函数（自动生成 Python `def`/`lambda`）、类与方法（含 `constructor`→`__init__`、静态方法）、模板字符串、`for..of`、`import/export` 等；遇到语义降级（如 do-while、稀疏数组、未实现的导出）会通过 `diagnostics` 输出提醒。
 - **代码生成**：`emit_module` 利用 `ast.unparse` 输出 Python 源码，并预留运行时代码拼接钩子；返回 `EmitResult` 方便上层决定如何落盘。
-- **CLI 管线**：`js2python convert` 调用前端→转换→生成全流程，支持 `--out`、`--strict`、`--runtime` 选项，把解析/分析/转换诊断统一输出，默认宽松模式下允许部分告警。
-- **测试体系**：基于 `pytest` 构建解析、转换、发射和 CLI 的单元/集成测试，`tests/cases` 收录典型 ES5 片段（函数调用、if/loop/switch、异常、字面量等），`tests/test_cli_integration.py` 验证命令行为。
+- **CLI 管线**：`js2python convert` 串联前端→转换→生成，新增 `--module` 控制模块解析，统一输出解析/分析/转换诊断，严格模式下可将告警视作错误。
+- **测试体系**：基于 `pytest` 的解析、转换、发射与 CLI 集成测试现已覆盖 ES5/ES6 常见片段（箭头函数、块级作用域、类、模块等），持续扩展覆盖面。
 
 ## 测试策略
 - **单元测试**: 针对转换规则和运行时函数，覆盖典型 ES5 语法（闭包、原型、`arguments` 等）。

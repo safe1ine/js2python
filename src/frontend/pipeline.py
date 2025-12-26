@@ -1,11 +1,10 @@
 """
 Front-end integration utilities stitching together parsing and scope analysis.
 
-The `run_frontend` function accepts raw ES5 JavaScript source, invokes the
-parser to obtain an AST, optionally runs scope/binding analysis, and persists
-cached artefacts when requested. Downstream phases can consume the aggregated
-result to drive transformations or diagnostics without reimplementing these
-steps.
+The `run_frontend` function accepts raw JavaScript source, invokes the parser to
+obtain an AST, optionally runs scope/binding analysis, and persists cached
+artefacts when requested. Downstream phases can consume the aggregated result to
+drive transformations or diagnostics without reimplementing these steps.
 """
 
 from __future__ import annotations
@@ -15,7 +14,7 @@ from pathlib import Path
 from typing import Optional, Union
 
 from analyzer import AnalysisResult, analyze_bindings
-from parser import ParseResult, parse_es5
+from parser import ParseResult, parse_js
 
 
 @dataclass(frozen=True)
@@ -44,25 +43,28 @@ def run_frontend(
     source_name: str = "<input>",
     tolerant: bool = True,
     analyze: bool = True,
+    source_type: str = "script",
     cache_dir: Optional[Union[str, Path]] = None,
 ) -> FrontEndResult:
     """
-    Execute parsing and optional scope analysis for ES5 JavaScript input.
+    Execute parsing and optional scope analysis for JavaScript input.
 
     Args:
-        source: Raw ES5 JavaScript source text.
+        source: Raw JavaScript source text.
         source_name: Identifier used in diagnostics, e.g. file path.
         tolerant: Forwarded to parser; when True esprima attempts recovery.
         analyze: Toggle to disable semantic analysis for performance/testing.
+        source_type: `"script"` or `"module"` to control parsing of import/export.
         cache_dir: Optional directory to write parse artefacts (`None` disables).
 
     Returns:
         FrontEndResult containing the parser output and optional analysis result.
     """
-    parse_result = parse_es5(
+    parse_result = parse_js(
         source,
         source_name=source_name,
         tolerant=tolerant,
+        source_type=source_type,
     )
 
     analysis_result: Optional[AnalysisResult] = None

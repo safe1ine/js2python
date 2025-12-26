@@ -1,4 +1,4 @@
-"""Semantic analysis helpers for ES5 JavaScript."""
+"""Semantic analysis helpers for ES5/ES6 JavaScript."""
 
 from .scope_tracker import (
     AnalysisIssue,
