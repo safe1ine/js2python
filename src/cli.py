@@ -1,5 +1,5 @@
 """
-Command-line interface for converting ES5 JavaScript files to Python.
+Command-line interface for converting ES5/ES6 JavaScript files to Python.
 """
 
 from __future__ import annotations
@@ -114,11 +114,11 @@ def convert_command(args: argparse.Namespace) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="js2python", description="Convert ES5 JavaScript to Python")
+    parser = argparse.ArgumentParser(prog="js2python", description="Convert ES5/ES6 JavaScript to Python")
     subparsers = parser.add_subparsers(dest="command")
 
     convert_parser = subparsers.add_parser("convert", help="Convert a single JS file to Python")
-    convert_parser.add_argument("input", help="Path to the ES5 JavaScript file")
+    convert_parser.add_argument("input", help="Path to the JavaScript file")
     convert_parser.add_argument(
         "--out",
         help="Output Python file path (defaults to same directory with .py extension)",
