@@ -104,6 +104,15 @@ js2python/
 └── README.md
 ```
 
+## 实现思路与当前进展
+- **解析层**：使用 Python 版 `esprima`，`parse_es5` 提供可容错的 AST 结果，同时算出源码哈希方便缓存；诊断通过 `ParseError` 结构统一返回。
+- **语义分析**：`analyze_bindings` 遍历 AST 构建全局/函数/捕获块作用域，记录 `var`、函数、参数绑定并捕捉 `eval`、`with` 等风险语法，产出 `AnalysisResult` 提供给下游。
+- **前端总线**：`run_frontend` 将解析与作用域分析串成一体，按需落盘缓存并聚合诊断，供转换器与报告直接消费。
+- **转换层**：`Transformer` 基于递归访问实现 ES5→Python AST 映射，覆盖函数、控制流（if/for/while/do-while/switch）、异常处理、对象/数组字面量、逻辑与赋值表达式等；对降级（如 do-while、稀疏数组）通过 `diagnostics` 发出提醒。
+- **代码生成**：`emit_module` 利用 `ast.unparse` 输出 Python 源码，并预留运行时代码拼接钩子；返回 `EmitResult` 方便上层决定如何落盘。
+- **CLI 管线**：`js2python convert` 调用前端→转换→生成全流程，支持 `--out`、`--strict`、`--runtime` 选项，把解析/分析/转换诊断统一输出，默认宽松模式下允许部分告警。
+- **测试体系**：基于 `pytest` 构建解析、转换、发射和 CLI 的单元/集成测试，`tests/cases` 收录典型 ES5 片段（函数调用、if/loop/switch、异常、字面量等），`tests/test_cli_integration.py` 验证命令行为。
+
 ## 测试策略
 - **单元测试**: 针对转换规则和运行时函数，覆盖典型 ES5 语法（闭包、原型、`arguments` 等）。
 - **样例测试**: 使用 Fixtures 对转换结果做文本/AST 快照比对，确保稳定性。
