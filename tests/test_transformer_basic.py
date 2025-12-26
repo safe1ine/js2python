@@ -166,3 +166,22 @@ def test_transformer_handles_module_imports_and_exports():
 
     functions = [stmt for stmt in module.body if isinstance(stmt, ast.FunctionDef)]
     assert any(fn.name == "load" for fn in functions)
+
+
+def test_transformer_handles_complex_suite():
+    program = _load_ast("tests/cases/complex_suite.js")
+    result = transform_program(program, source_name="complex_suite.js")
+    module = result.module
+
+    function_names = {stmt.name for stmt in module.body if isinstance(stmt, ast.FunctionDef)}
+    assert {"greet", "buildData", "classifyScore", "summarize"} <= function_names
+
+    class_def = next(stmt for stmt in module.body if isinstance(stmt, ast.ClassDef))
+    assert class_def.name == "Reporter"
+    method_names = {stmt.name for stmt in class_def.body if isinstance(stmt, ast.FunctionDef)}
+    assert {"__init__", "summary"} <= method_names
+
+    assigns = [stmt for stmt in module.body if isinstance(stmt, ast.Assign)]
+    assert any(isinstance(assign.value, ast.List) for assign in assigns)
+
+    assert isinstance(result.diagnostics, list)

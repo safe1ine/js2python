@@ -642,6 +642,30 @@ class Transformer:
         args = [self._transform_expression(arg) for arg in node.get("arguments", [])]
         return ast.Call(func=callee, args=args, keywords=[])
 
+    def _transform_expr_UnaryExpression(self, node: Dict[str, Any]) -> ast.expr:
+        operator = node.get("operator")
+        argument = self._transform_expression(node.get("argument"))
+        prefix = node.get("prefix", True)
+
+        if operator == "!":
+            return ast.UnaryOp(op=ast.Not(), operand=argument)
+        if operator == "-":
+            return ast.UnaryOp(op=ast.USub(), operand=argument)
+        if operator == "+":
+            return ast.UnaryOp(op=ast.UAdd(), operand=argument)
+        if operator == "void":
+            self._warn("`void` operator translated to None side effect.", node)
+            return ast.Constant(value=None)
+        if operator == "typeof":
+            self._warn("`typeof` lowered to Python isinstance checks may be required.", node)
+            return ast.Call(
+                func=ast.Name(id="type", ctx=ast.Load()),
+                args=[argument],
+                keywords=[],
+            )
+
+        raise TransformError(f"Unsupported unary operator: {operator}", node=node)
+
     def _transform_expr_MemberExpression(self, node: Dict[str, Any]) -> ast.expr:
         object_node = node.get("object")
         property_node = node.get("property")
@@ -879,6 +903,7 @@ class Transformer:
             "ThisExpression": self._transform_expr_ThisExpression,
             "TemplateLiteral": self._transform_expr_TemplateLiteral,
             "ArrowFunctionExpression": self._transform_expr_ArrowFunctionExpression,
+            "UnaryExpression": self._transform_expr_UnaryExpression,
         }
 
 
