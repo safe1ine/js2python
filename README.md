@@ -33,6 +33,9 @@ js2python convert legacy/widget.js
 
 # 转换 ES Module，并输出到指定路径
 js2python convert modern/module.js --module --out build/module.py
+
+# 体验复杂示例 demo
+js2python convert demo.js --out demo.py
 ```
 
 ## 架构概览
